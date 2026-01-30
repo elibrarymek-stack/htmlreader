@@ -1,171 +1,88 @@
 <!doctype html>
-<html lang="az">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PDF OCR (Azerbaijani) → Text</title>
+  <title>PDF Text Extractor</title>
   <style>
     body { font-family: system-ui, Arial, sans-serif; margin: 16px; }
-    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-    button { padding:10px 14px; cursor:pointer; }
-    button:disabled { opacity:.45; cursor:not-allowed; }
-    textarea { width:100%; height:55vh; margin-top:12px; padding:10px; }
-    #status { margin-top:10px; white-space:pre-wrap; color:#333; }
-    .hint { color:#555; margin-top:8px; }
-    canvas { display:none; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    button { padding: 10px 14px; cursor: pointer; }
+    textarea { width: 100%; height: 65vh; margin-top: 12px; padding: 10px; }
+    #status { margin-top: 10px; white-space: pre-wrap; color: #333; }
   </style>
 </head>
 <body>
-  <h2>PDF → OCR (Azeri) → Text</h2>
+  <h2>Upload PDF → Extract Text</h2>
 
   <div class="row">
-    <input type="file" id="file" accept="application/pdf" />
-    <button id="run" disabled>Run OCR</button>
+    <input type="file" id="pdf" accept="application/pdf" />
+    <button id="extract" disabled>Extract</button>
     <button id="download" disabled>Download .txt</button>
   </div>
 
-  <div id="status">Loading libraries…</div>
-  <div class="hint">If buttons never enable, open DevTools (F12) → Console and you’ll see which library failed to load.</div>
-  <textarea id="out" readonly placeholder="OCR text will appear here..."></textarea>
-  <canvas id="c"></canvas>
-
-  <!-- Load PDF.js with fallback -->
-  <script>
-    function loadScript(src) {
-      return new Promise((resolve, reject) => {
-        const s = document.createElement("script");
-        s.src = src;
-        s.onload = resolve;
-        s.onerror = () => reject(new Error("Failed to load: " + src));
-        document.head.appendChild(s);
-      });
-    }
-
-    (async () => {
-      const statusEl = document.getElementById("status");
-      try {
-        // Try jsDelivr first
-        await loadScript("https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.js")
-          .catch(async () => {
-            // Fallback to unpkg
-            await loadScript("https://unpkg.com/pdfjs-dist@4.10.38/build/pdf.min.js");
-          });
-
-        // Load Tesseract
-        await loadScript("https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js");
-
-        statusEl.textContent = "Libraries loaded. Choose a PDF.";
-        window.__LIBS_OK__ = true;
-      } catch (e) {
-        statusEl.textContent =
-          "Libraries failed to load.\n\n" +
-          "Fix:\n" +
-          "• Run from http://localhost or GitHub Pages (not file://)\n" +
-          "• If your network blocks jsdelivr/unpkg, try another network or host libs locally\n\n" +
-          String(e);
-        window.__LIBS_OK__ = false;
-      }
-    })();
-  </script>
+  <div id="status">Choose a PDF file.</div>
+  <textarea id="out" readonly placeholder="Extracted text will appear here..."></textarea>
 
   <script>
-    const fileEl = document.getElementById("file");
-    const runBtn = document.getElementById("run");
+    const pdfEl = document.getElementById("pdf");
+    const extractBtn = document.getElementById("extract");
     const dlBtn = document.getElementById("download");
-    const outEl = document.getElementById("out");
     const statusEl = document.getElementById("status");
-    const canvas = document.getElementById("c");
+    const outEl = document.getElementById("out");
 
-    let pdfDoc = null;
     let lastText = "";
-    let lastFilename = "ocr.txt";
+    let lastFilename = "extracted.txt";
 
-    function libsReady() {
-      return window.__LIBS_OK__ === true && typeof pdfjsLib !== "undefined" && typeof Tesseract !== "undefined";
-    }
-
-    // Enable button only when libs are ready + file chosen + PDF loaded
-    fileEl.addEventListener("change", async () => {
+    pdfEl.addEventListener("change", () => {
+      const f = pdfEl.files && pdfEl.files[0];
+      extractBtn.disabled = !f;
+      dlBtn.disabled = true;
       outEl.value = "";
       lastText = "";
-      dlBtn.disabled = true;
-      runBtn.disabled = true;
-      pdfDoc = null;
 
-      const f = fileEl.files && fileEl.files[0];
-      if (!f) return;
-
-      if (!libsReady()) {
-        statusEl.textContent = "Libraries not loaded. Check Console (F12).";
-        return;
-      }
-
-      // Set worker
-      // (must be reachable; GitHub Pages / localhost works)
-      pdfjsLib.GlobalWorkerOptions.workerSrc =
-        "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.js";
-
-      statusEl.textContent = "Loading PDF…";
-      lastFilename = f.name.replace(/\.pdf$/i, "") + "_ocr.txt";
-
-      try {
-        const buf = await f.arrayBuffer();
-        pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
-
-        statusEl.textContent = `PDF loaded. Pages: ${pdfDoc.numPages}\nClick “Run OCR”.`;
-        runBtn.disabled = false;
-      } catch (e) {
-        statusEl.textContent = "Failed to load PDF: " + (e?.message || e);
+      if (f) {
+        statusEl.textContent = `Selected: ${f.name}`;
+        lastFilename = f.name.replace(/\.pdf$/i, "") + ".txt";
+      } else {
+        statusEl.textContent = "Choose a PDF file.";
       }
     });
 
-    runBtn.addEventListener("click", async () => {
-      if (!pdfDoc) return;
+    extractBtn.addEventListener("click", async () => {
+      const f = pdfEl.files && pdfEl.files[0];
+      if (!f) return;
 
-      runBtn.disabled = true;
-      dlBtn.disabled = true;
+      statusEl.textContent = "Uploading PDF to local extractor…";
       outEl.value = "";
+      dlBtn.disabled = true;
       lastText = "";
 
-      // OCR language: Azerbaijani
-      const worker = await Tesseract.createWorker("aze", 1, {
-        logger: m => {
-          if (m.status && typeof m.progress === "number") {
-            statusEl.textContent = `${m.status}: ${(m.progress * 100).toFixed(0)}%`;
-          }
-        }
-      });
-
       try {
-        let textAll = "";
-        const scale = 2; // good quality
-        for (let p = 1; p <= pdfDoc.numPages; p++) {
-          statusEl.textContent = `Rendering page ${p}/${pdfDoc.numPages}…`;
-          const page = await pdfDoc.getPage(p);
-          const viewport = page.getViewport({ scale });
+        const form = new FormData();
+        form.append("pdf", f);
 
-          canvas.width = Math.floor(viewport.width);
-          canvas.height = Math.floor(viewport.height);
-          const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        // Your local server must expose POST /extract
+        const res = await fetch("http://localhost:3000/extract", {
+          method: "POST",
+          body: form
+        });
 
-          await page.render({ canvasContext: ctx, viewport }).promise;
-
-          statusEl.textContent = `OCR page ${p}/${pdfDoc.numPages}…`;
-          const { data } = await worker.recognize(canvas);
-          const pageText = (data.text || "").trim();
-
-          textAll += `\n\n----- Page ${p} -----\n${pageText}`;
-          outEl.value = textAll.trim();
+        if (!res.ok) {
+          const msg = await res.text();
+          throw new Error(`Server error ${res.status}: ${msg}`);
         }
 
-        lastText = textAll.trim();
+        const data = await res.json(); // { text: "..." }
+        lastText = data.text || "";
+        outEl.value = lastText || "(No text extracted.)";
+
         dlBtn.disabled = !lastText;
         statusEl.textContent = "Done.";
       } catch (e) {
-        statusEl.textContent = "OCR error: " + (e?.message || e);
-      } finally {
-        await worker.terminate();
-        runBtn.disabled = false;
+        statusEl.textContent =
+          "Failed. Make sure the local server is running at http://localhost:3000\n\n" +
+          "Error: " + (e?.message || e);
       }
     });
 
