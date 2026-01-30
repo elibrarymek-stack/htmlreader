@@ -3,98 +3,106 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PDF Text Extractor</title>
+  <title>Site → Text (APITier)</title>
   <style>
     body { font-family: system-ui, Arial, sans-serif; margin: 16px; }
-    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-    button { padding: 10px 14px; cursor: pointer; }
-    textarea { width: 100%; height: 65vh; margin-top: 12px; padding: 10px; }
-    #status { margin-top: 10px; white-space: pre-wrap; color: #333; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    input { padding:10px; font-size:16px; min-width: 320px; flex: 1; }
+    button { padding:10px 14px; font-size:16px; cursor:pointer; }
+    textarea { width:100%; height:65vh; margin-top:12px; padding:10px; }
+    #status { margin-top:10px; white-space:pre-wrap; color:#333; }
+    .small { color:#555; margin-top:6px; }
   </style>
 </head>
 <body>
-  <h2>Upload PDF → Extract Text</h2>
+  <h2>Convert a Website to Text (APITier)</h2>
 
   <div class="row">
-    <input type="file" id="pdf" accept="application/pdf" />
-    <button id="extract" disabled>Extract</button>
-    <button id="download" disabled>Download .txt</button>
+    <input id="url" placeholder="https://example.com" />
+    <button id="go">Convert</button>
   </div>
 
-  <div id="status">Choose a PDF file.</div>
+  <div id="status">Enter a URL and click Convert.</div>
+  <div class="small">
+    If you get a CORS error in the browser, you must call the API from a backend (server/proxy).
+  </div>
+
   <textarea id="out" readonly placeholder="Extracted text will appear here..."></textarea>
 
   <script>
-    const pdfEl = document.getElementById("pdf");
-    const extractBtn = document.getElementById("extract");
-    const dlBtn = document.getElementById("download");
-    const statusEl = document.getElementById("status");
+    // Your API key (WARNING: visible to anyone viewing your GitHub page)
+    const API_KEY = "FFgoacRNbm8sGjoPF7KUL6iIOY3nAJYz897qriA7";
+
+    // APITier Web→Text endpoint pattern (same base as their Web→PDF examples)
+    // If APITier’s docs show a different exact path for “to/text”, change it here.
+    const ENDPOINT = "https://web.apitier.com/convert/url/to/text";
+
+    const urlEl = document.getElementById("url");
+    const goBtn = document.getElementById("go");
     const outEl = document.getElementById("out");
+    const statusEl = document.getElementById("status");
 
-    let lastText = "";
-    let lastFilename = "extracted.txt";
+    function normalizeUrl(u) {
+      u = (u || "").trim();
+      if (!u) return "";
+      if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+      return u;
+    }
 
-    pdfEl.addEventListener("change", () => {
-      const f = pdfEl.files && pdfEl.files[0];
-      extractBtn.disabled = !f;
-      dlBtn.disabled = true;
-      outEl.value = "";
-      lastText = "";
-
-      if (f) {
-        statusEl.textContent = `Selected: ${f.name}`;
-        lastFilename = f.name.replace(/\.pdf$/i, "") + ".txt";
-      } else {
-        statusEl.textContent = "Choose a PDF file.";
+    goBtn.addEventListener("click", async () => {
+      const targetUrl = normalizeUrl(urlEl.value);
+      if (!targetUrl) {
+        statusEl.textContent = "Please enter a URL.";
+        return;
       }
-    });
 
-    extractBtn.addEventListener("click", async () => {
-      const f = pdfEl.files && pdfEl.files[0];
-      if (!f) return;
-
-      statusEl.textContent = "Uploading PDF to local extractor…";
       outEl.value = "";
-      dlBtn.disabled = true;
-      lastText = "";
+      statusEl.textContent = "Calling APITier…";
 
       try {
-        const form = new FormData();
-        form.append("pdf", f);
+        const apiUrl = `${ENDPOINT}?x-api-key=${encodeURIComponent(API_KEY)}`;
 
-        // Your local server must expose POST /extract
-        const res = await fetch("http://localhost:3000/extract", {
+        const res = await fetch(apiUrl, {
           method: "POST",
-          body: form
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: targetUrl })
         });
 
+        // If the API returns non-JSON (rare), show raw text
+        const contentType = res.headers.get("content-type") || "";
+        const raw = await res.text();
+
         if (!res.ok) {
-          const msg = await res.text();
-          throw new Error(`Server error ${res.status}: ${msg}`);
+          statusEl.textContent = `API error ${res.status}:\n${raw}`;
+          return;
         }
 
-        const data = await res.json(); // { text: "..." }
-        lastText = data.text || "";
-        outEl.value = lastText || "(No text extracted.)";
+        if (contentType.includes("application/json")) {
+          const data = JSON.parse(raw);
 
-        dlBtn.disabled = !lastText;
+          // Different APIs return different field names; try common ones
+          const text =
+            data.text ||
+            data.content ||
+            data.data ||
+            data.result ||
+            raw;
+
+          outEl.value = (typeof text === "string") ? text : JSON.stringify(text, null, 2);
+        } else {
+          outEl.value = raw;
+        }
+
         statusEl.textContent = "Done.";
       } catch (e) {
         statusEl.textContent =
-          "Failed. Make sure the local server is running at http://localhost:3000\n\n" +
+          "Failed to fetch.\n\n" +
+          "Common reasons:\n" +
+          "• CORS blocked in browser (needs server/proxy)\n" +
+          "• Wrong endpoint path\n" +
+          "• Network blocks the API domain\n\n" +
           "Error: " + (e?.message || e);
       }
-    });
-
-    dlBtn.addEventListener("click", () => {
-      const blob = new Blob([lastText], { type: "text/plain;charset=utf-8" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = lastFilename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(a.href);
     });
   </script>
 </body>
