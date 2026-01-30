@@ -1,17 +1,184 @@
 <!doctype html>
-<html>
+<html lang="az">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PDF OCR (Azerbaijani) → Text</title>
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; margin: 16px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    button { padding: 10px 14px; cursor: pointer; }
+    textarea { width: 100%; height: 55vh; margin-top: 12px; padding: 10px; }
+    #status { margin-top: 10px; white-space: pre-wrap; color: #333; }
+    canvas { display:none; }
+    select, input[type="number"] { padding: 8px; }
+    .hint { color:#555; margin-top: 8px; }
+  </style>
+</head>
 <body>
-<h3>Upload file → read text</h3>
-<input type="file" id="f">
-<pre id="out"></pre>
+  <h2>PDF → OCR (Azeri) → Text</h2>
 
-<script>
-document.getElementById("f").onchange = async e => {
-  const file = e.target.files[0];
-  if (!file) return;
-  const text = await file.text();
-  document.getElementById("out").textContent = text;
-};
-</script>
+  <div class="row">
+    <input type="file" id="file" accept="application/pdf" />
+    <label>Start page <input id="start" type="number" min="1" value="1" style="width:90px"></label>
+    <label>End page <input id="end" type="number" min="1" value="1" style="width:90px"></label>
+    <label>Quality
+      <select id="scale">
+        <option value="1.5">Normal</option>
+        <option value="2" selected>Good</option>
+        <option value="3">High (slower)</option>
+      </select>
+    </label>
+    <button id="run" disabled>Run OCR</button>
+    <button id="download" disabled>Download .txt</button>
+  </div>
+
+  <div id="status">Choose a PDF.</div>
+  <div class="hint">
+    This is OCR: it works even when normal extraction produces 0000x/garbage. First run may download Azerbaijani language data.
+  </div>
+
+  <textarea id="out" readonly placeholder="OCR text will appear here..."></textarea>
+  <canvas id="c"></canvas>
+
+  <!-- PDF.js -->
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.min.js"></script>
+  <!-- Tesseract.js -->
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+  <script>
+    // PDF.js worker
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.min.js";
+
+    const fileEl = document.getElementById("file");
+    const runBtn = document.getElementById("run");
+    const dlBtn = document.getElementById("download");
+    const outEl = document.getElementById("out");
+    const statusEl = document.getElementById("status");
+    const canvas = document.getElementById("c");
+    const startEl = document.getElementById("start");
+    const endEl = document.getElementById("end");
+    const scaleEl = document.getElementById("scale");
+
+    let lastText = "";
+    let lastFilename = "ocr.txt";
+    let pdfDoc = null;
+
+    fileEl.addEventListener("change", async () => {
+      outEl.value = "";
+      lastText = "";
+      dlBtn.disabled = true;
+
+      const f = fileEl.files && fileEl.files[0];
+      runBtn.disabled = !f;
+      if (!f) {
+        statusEl.textContent = "Choose a PDF.";
+        pdfDoc = null;
+        return;
+      }
+
+      lastFilename = f.name.replace(/\.pdf$/i, "") + "_ocr.txt";
+      statusEl.textContent = "Loading PDF...";
+
+      try {
+        const buf = await f.arrayBuffer();
+        pdfDoc = await pdfjsLib.getDocument({ data: buf }).promise;
+
+        startEl.value = 1;
+        endEl.value = pdfDoc.numPages;
+
+        statusEl.textContent = `Loaded: ${f.name}\nPages: ${pdfDoc.numPages}\nSet page range and click Run OCR.`;
+      } catch (e) {
+        pdfDoc = null;
+        statusEl.textContent = "Failed to load PDF: " + (e?.message || e);
+      }
+    });
+
+    function clamp(n, a, b) {
+      n = Number(n);
+      if (Number.isNaN(n)) return a;
+      return Math.max(a, Math.min(b, n));
+    }
+
+    runBtn.addEventListener("click", async () => {
+      if (!pdfDoc) return;
+
+      runBtn.disabled = true;
+      dlBtn.disabled = true;
+      outEl.value = "";
+      lastText = "";
+
+      const total = pdfDoc.numPages;
+      const start = clamp(startEl.value, 1, total);
+      const end = clamp(endEl.value, start, total);
+      const scale = Number(scaleEl.value) || 2;
+
+      statusEl.textContent =
+        `Starting OCR (language: aze)\nPages: ${start}..${end}\nQuality scale: ${scale}\n\nDownloading language data on first run may take time.`;
+
+      // Create Tesseract worker
+      const worker = await Tesseract.createWorker("aze", 1, {
+        logger: m => {
+          // progress updates
+          if (m.status && typeof m.progress === "number") {
+            statusEl.textContent =
+              `OCR (aze)\nPages: ${start}..${end}\nNow: ${currentPageLabel}\n` +
+              `${m.status}: ${(m.progress * 100).toFixed(0)}%`;
+          }
+        }
+      });
+
+      let textAll = "";
+      let currentPageLabel = "";
+
+      try {
+        for (let p = start; p <= end; p++) {
+          currentPageLabel = `page ${p}/${end}`;
+
+          // Render PDF page to canvas
+          const page = await pdfDoc.getPage(p);
+          const viewport = page.getViewport({ scale });
+
+          canvas.width = Math.floor(viewport.width);
+          canvas.height = Math.floor(viewport.height);
+
+          const ctx = canvas.getContext("2d", { willReadFrequently: true });
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+          await page.render({ canvasContext: ctx, viewport }).promise;
+
+          // OCR the canvas image
+          statusEl.textContent = `Rendering done.\nRunning OCR on page ${p}/${end}...`;
+          const { data } = await worker.recognize(canvas);
+
+          const pageText = (data.text || "").trim();
+
+          textAll += `\n\n----- Page ${p} -----\n${pageText}`;
+          outEl.value = textAll.trim();
+        }
+
+        lastText = textAll.trim();
+        dlBtn.disabled = !lastText;
+        statusEl.textContent = "Done. OCR complete.";
+      } catch (e) {
+        statusEl.textContent = "Error during OCR: " + (e?.message || e);
+      } finally {
+        await worker.terminate();
+        runBtn.disabled = false;
+      }
+    });
+
+    dlBtn.addEventListener("click", () => {
+      const blob = new Blob([lastText], { type: "text/plain;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = lastFilename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(a.href);
+    });
+  </script>
 </body>
 </html>
